@@ -140,14 +140,14 @@ function ManualGrading() {
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={label}>URGENCY</label>
-          <select className={cn(field, "text-black")} value={urgency} onChange={(e) => setUrgency(e.target.value as Urgency)}>
+          <select className={cn(field, "bg-cyan text-white")} value={urgency} onChange={(e) => setUrgency(e.target.value as Urgency)}>
             <option>Urgent</option>
             <option>Normal</option>
           </select>
         </div>
         <div>
           <label className={label}>DIFFICULTY</label>
-          <select className={cn(field, "text-black")} value={difficulty} onChange={(e) => setDifficulty(e.target.value as Difficulty)}>
+          <select className={cn(field, "bg-cyan text-white")} value={difficulty} onChange={(e) => setDifficulty(e.target.value as Difficulty)}>
             <option>Easy</option>
             <option>Normal</option>
             <option>Hard</option>
