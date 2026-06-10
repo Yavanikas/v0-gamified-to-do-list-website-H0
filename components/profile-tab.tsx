@@ -62,15 +62,7 @@ export function ProfileTab() {
           {/* Username / Level / XP bar / Streak */}
           <div className="flex flex-1 flex-col gap-2">
             <p className="font-sans text-2xl tracking-widest text-foreground">USER_01</p>
-            {/* Level with level-up icon */}
-            <p className="flex items-center gap-2 font-sans text-base tracking-widest text-foreground/80">
-              <Image
-                src="/icons/levelup.png"
-                alt="Level up"
-                width={22}
-                height={22}
-                className="pixelated"
-              />
+            <p className="font-sans text-base tracking-widest text-foreground/80">
               LEVEL {level}
             </p>
 
