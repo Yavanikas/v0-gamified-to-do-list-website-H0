@@ -2,17 +2,8 @@
 
 import { useState } from "react"
 import Image from "next/image"
-import { Eye, EyeOff, Flame } from "lucide-react"
+import { Eye, EyeOff } from "lucide-react"
 import { useGame } from "@/lib/game-context"
-
-function Stat({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  return (
-    <div className="game-panel flex flex-col items-center justify-center gap-1 px-3 py-4 text-center">
-      <span className="font-sans text-xs tracking-wide text-foreground/70">{label}</span>
-      <span className={`font-sans text-xl tracking-wide ${accent ?? "text-foreground"}`}>{value}</span>
-    </div>
-  )
-}
 
 export function ProfileTab() {
   const { level, xp, coins, streak } = useGame()
@@ -21,76 +12,157 @@ export function ProfileTab() {
 
   const email = "user_pixel@questmail.com"
   const password = "p1x3lQuest!2024"
+  const xpCurrent = xp % 1000
+  const xpMax = 1000
+  const xpPct = Math.min(100, Math.round((xpCurrent / xpMax) * 100))
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6">
+      {/* Single unified panel */}
       <section className="game-panel p-6 sm:p-8">
-        <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
-          <Image
-            src="/icons/avatar.png"
-            alt="User avatar"
-            width={88}
-            height={88}
-            className="pixelated border border-panel-border"
-          />
-          <div className="text-center sm:text-left">
-            <h2 className="font-sans text-2xl tracking-wide text-foreground">USER PROFILE</h2>
-            <p className="font-mono text-xl text-foreground/70">USER ID: #PX-00015</p>
+
+        {/* ── Heading ──────────────────────────────── */}
+        <h2 className="mb-5 font-sans text-2xl tracking-widest text-foreground">
+          USER PROFILE
+        </h2>
+
+        {/* ── Top row: avatar | stats | treasure ───── */}
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+
+          {/* Avatar */}
+          <div
+            className="game-panel flex-shrink-0 overflow-hidden"
+            style={{ width: 120, height: 120 }}
+          >
+            <Image
+              src="/icons/avatar.png"
+              alt="User avatar"
+              width={120}
+              height={120}
+              className="pixelated h-full w-full object-cover"
+            />
           </div>
-        </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <Stat label="LEVEL" value={`${level}`} accent="text-cyan" />
-          <Stat label="XP" value={xp.toLocaleString()} />
-          <Stat label="GOLD COINS" value={coins.toLocaleString()} accent="text-gold" />
-          <div className="game-panel flex flex-col items-center justify-center gap-1 px-3 py-4 text-center">
-            <span className="font-sans text-xs tracking-wide text-foreground/70">DAY STREAK</span>
-            <span className="flex items-center gap-1 font-sans text-xl tracking-wide text-foreground">
-              {streak} <Flame className="h-5 w-5 text-gold" fill="currentColor" />
-            </span>
+          {/* Username / Level / XP bar / Streak */}
+          <div className="flex flex-1 flex-col gap-2">
+            <p className="font-sans text-2xl tracking-widest text-foreground">USER_01</p>
+            <p className="font-sans text-base tracking-widest text-foreground/80">
+              LEVEL {level}
+            </p>
+
+            {/* XP progress bar — full width, green fill */}
+            <div
+              className="h-4 w-full border border-panel-border"
+              style={{ background: "oklch(0.25 0.02 220 / 60%)" }}
+              role="progressbar"
+              aria-valuenow={xpPct}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`XP progress ${xpPct}%`}
+            >
+              <div
+                className="h-full transition-all duration-300"
+                style={{
+                  width: `${xpPct}%`,
+                  background: "oklch(0.72 0.22 142)",
+                }}
+              />
+            </div>
+
+            {/* Streak */}
+            <p className="font-sans text-base tracking-widest text-foreground">
+              {streak} DAY STREAK{" "}
+              <span role="img" aria-label="fire">🔥</span>
+            </p>
           </div>
-        </div>
-      </section>
 
-      {/* Account details */}
-      <section className="game-panel mt-6 p-6 sm:p-8">
-        <h3 className="mb-5 font-sans text-xl tracking-wide text-foreground">ACCOUNT DETAILS</h3>
-
-        <div className="space-y-4">
-          <div>
-            <label className="mb-1 block font-sans text-xs tracking-wide text-foreground/80">EMAIL</label>
+          {/* Treasure box */}
+          <div className="game-panel flex-shrink-0 flex flex-col items-center justify-center gap-1 px-5 py-4 text-center min-w-[140px]">
+            <p className="font-sans text-sm tracking-widest text-foreground/80">TREASURE</p>
             <div className="flex items-center gap-2">
-              <div className="flex-1 border border-panel-border bg-input/40 px-3 py-2 font-mono text-lg text-foreground">
-                {showEmail ? email : "•".repeat(email.length)}
-              </div>
+              <Image
+                src="/icons/coin.png"
+                alt="Gold coin"
+                width={40}
+                height={40}
+                className="pixelated"
+              />
+              <span className="font-sans text-3xl tracking-wide text-gold">
+                {coins.toLocaleString()}
+              </span>
+            </div>
+            <p className="font-sans text-xs tracking-widest text-foreground/70">GOLD COINS</p>
+          </div>
+        </div>
+
+        {/* ── Divider ──────────────────────────────── */}
+        <div
+          className="my-6 w-full border-t"
+          style={{ borderColor: "var(--panel-border)" }}
+          aria-hidden
+        />
+
+        {/* ── Account Details ───────────────────────── */}
+        <h3 className="mb-5 font-sans text-2xl tracking-widest text-foreground">
+          ACCOUNT DETAILS
+        </h3>
+
+        <div className="space-y-5">
+          {/* Email row */}
+          <div className="flex items-center gap-4">
+            <span
+              className="w-28 flex-shrink-0 font-sans text-sm tracking-widest text-foreground"
+            >
+              EMAIL
+            </span>
+            <div
+              className="flex flex-1 items-center border border-panel-border"
+              style={{ background: "oklch(0.35 0.025 220 / 50%)" }}
+            >
+              <span className="flex-1 px-4 py-3 font-mono text-lg tracking-widest text-foreground/90">
+                {showEmail ? email : "• • • • • • •"}
+              </span>
               <button
                 type="button"
                 onClick={() => setShowEmail((v) => !v)}
-                aria-label={showEmail ? "Hide email" : "Unhide email"}
-                className="flex h-[42px] w-[42px] items-center justify-center border border-panel-border bg-input/40 text-foreground transition-colors hover:border-cyan"
+                aria-label={showEmail ? "Hide email" : "Show email"}
+                className="flex h-full items-center justify-center px-4 py-3 text-foreground/70 transition-colors hover:text-cyan"
               >
-                {showEmail ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                {showEmail
+                  ? <EyeOff className="h-5 w-5" />
+                  : <Eye className="h-5 w-5" />}
               </button>
             </div>
           </div>
 
-          <div>
-            <label className="mb-1 block font-sans text-xs tracking-wide text-foreground/80">PASSWORD</label>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 border border-panel-border bg-input/40 px-3 py-2 font-mono text-lg text-foreground">
-                {showPassword ? password : "•".repeat(password.length)}
-              </div>
+          {/* Password row */}
+          <div className="flex items-center gap-4">
+            <span
+              className="w-28 flex-shrink-0 font-sans text-sm tracking-widest text-foreground"
+            >
+              PASSWORD
+            </span>
+            <div
+              className="flex flex-1 items-center border border-panel-border"
+              style={{ background: "oklch(0.35 0.025 220 / 50%)" }}
+            >
+              <span className="flex-1 px-4 py-3 font-mono text-lg tracking-widest text-foreground/90">
+                {showPassword ? password : "• • • • • • •"}
+              </span>
               <button
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
-                aria-label={showPassword ? "Hide password" : "Unhide password"}
-                className="flex h-[42px] w-[42px] items-center justify-center border border-panel-border bg-input/40 text-foreground transition-colors hover:border-cyan"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                className="flex h-full items-center justify-center px-4 py-3 text-foreground/70 transition-colors hover:text-cyan"
               >
-                {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                {showPassword
+                  ? <EyeOff className="h-5 w-5" />
+                  : <Eye className="h-5 w-5" />}
               </button>
             </div>
           </div>
         </div>
+
       </section>
     </div>
   )
