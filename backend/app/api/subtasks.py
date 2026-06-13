@@ -30,7 +30,6 @@ from app.services.ai import breakdown_task as ai_breakdown
 router = APIRouter()
 
 POINTS_PER_SUBTASK = 10    # earned when any subtask is completed
-POINTS_TASK_BONUS  = 50    # bonus earned when ALL subtasks of a task are done
 
 
 # ── Request schemas ────────────────────────────────────────────────────────────
@@ -39,6 +38,7 @@ class SubtaskCreateRequest(BaseModel):
     title: str
     description: Optional[str] = None
     estimated_time: Optional[int] = None   # minutes
+    points: Optional[int] = 10
 
     class Config:
         json_schema_extra = {
@@ -105,25 +105,27 @@ def breakdown_task(
     """
     task = _get_owned_task(task_id, current_user.id, db)
 
-    # Call Gemini AI
+    # Call Groq AI
     try:
         subtasks_data = ai_breakdown(
             task_title=task.title,
             task_description=task.description or "",
             db=db,
         )
+        if not subtasks_data:
+            raise RuntimeError("Empty subtasks list generated.")
     except ValueError as e:
-        # GOOGLE_API_KEY is missing
+        # GROQ_API_KEY is missing
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(e),
         )
     except RuntimeError as e:
-        # Gemini API failed after retries — no fallback
+        # Groq API failed or returned empty
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "Gemini AI is currently unavailable (rate limit or API error). "
+                f"Groq AI is currently unavailable or failed to generate subtasks: {e}. "
                 "Please try again later, or add subtasks manually."
             ),
         )
@@ -140,6 +142,7 @@ def breakdown_task(
             task_id=task.id,
             title=item["title"],
             estimated_time=item.get("estimated_time", 30),
+            points=item.get("points", 10),
             status="not_started",
             ai_suggested=True,   # flag so the frontend can show an AI badge
         )
@@ -164,6 +167,7 @@ def breakdown_task(
                 "title": s.title,
                 "status": s.status,
                 "estimated_time": s.estimated_time,
+                "points": s.points,
                 "ai_suggested": s.ai_suggested,
             }
             for s in saved_subtasks
@@ -195,6 +199,7 @@ def add_subtask(
         title=data.title,
         description=data.description,
         estimated_time=data.estimated_time,
+        points=data.points or 10,
         status="not_started",
         ai_suggested=False,
     )
@@ -212,6 +217,7 @@ def add_subtask(
         "title": subtask.title,
         "status": subtask.status,
         "estimated_time": subtask.estimated_time,
+        "points": subtask.points,
         "ai_suggested": subtask.ai_suggested,
         "task_id": str(task.id),
     }
@@ -264,8 +270,8 @@ def complete_subtask(
         db.flush()
 
     # Award points for this subtask
-    gamification.add_points(POINTS_PER_SUBTASK)
-    points_earned = POINTS_PER_SUBTASK
+    points_earned = subtask.points
+    gamification.add_points(points_earned)
     task_completed = False
 
     # Load the parent task to check if ALL subtasks are now done
@@ -273,10 +279,12 @@ def complete_subtask(
     all_subtasks = db.query(Subtask).filter(Subtask.task_id == task.id).all()
     all_done = all(s.status == "completed" for s in all_subtasks)
 
+    bonus_awarded = 0
     if all_done:
         # Bonus points for finishing the whole task
-        gamification.add_points(POINTS_TASK_BONUS)
-        points_earned += POINTS_TASK_BONUS
+        bonus_awarded = task.bonus_points
+        gamification.add_points(bonus_awarded)
+        points_earned += bonus_awarded
         task.status = "completed"
         task_completed = True
 
@@ -286,13 +294,15 @@ def complete_subtask(
         "message": (
             f"Subtask completed! +{points_earned} points 🎉"
             if not task_completed
-            else f"Task fully completed! +{points_earned} points (includes {POINTS_TASK_BONUS} bonus) 🏆"
+            else f"Task fully completed! +{points_earned} points (includes {bonus_awarded} bonus) 🏆"
         ),
         "subtask_id": subtask_id,
         "points_earned": points_earned,
         "total_points": gamification.total_points,
         "level": gamification.level,
         "task_completed": task_completed,
+        "bonus_awarded": bonus_awarded,
+        "bonus_reason": task.bonus_reason if task_completed else None,
     }
 
 

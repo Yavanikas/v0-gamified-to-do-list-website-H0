@@ -3,18 +3,18 @@ app/services/ai.py
 ------------------
 All communication with Groq AI lives here.
 
-Two functions are exposed:
-  breakdown_task()   — given a task title + description, returns a list of subtasks
-  analyze_reward()   — given a reward name + description, suggests a fair points cost
+Three functions are exposed:
+  breakdown_task()         — given a task title + description, returns a list of subtasks
+  analyze_reward()         — given a reward name + description, suggests a fair points cost
+  analyze_task_difficulty()— evaluates a task and assigns dynamic bonus points
 
 Rate-limit protection (2 layers):
   1. DATABASE CACHE  — identical requests are served from the ai_cache table
-                       without touching the Groq API at all.
-  2. EXPONENTIAL BACKOFF — if the API returns a rate-limit error (429),
-                       we wait and retry up to 3 times before giving up.
+  2. EXPONENTIAL BACKOFF — retries up to 3 times on rate-limit errors (429)
 
-NO local fallback — if Groq fails, we raise a clear error so the user
-knows to add subtasks manually or try again later.
+Safe Fallbacks:
+  If the API fails completely, functions return safe default values so the 
+  application never crashes.
 """
 
 import hashlib
@@ -22,6 +22,35 @@ import json
 import logging
 import re
 import time
+from typing import Optional
+
+# Monkeypatch httpx to maintain compatibility between newer httpx (0.28+) 
+# and older groq (0.9.0) which uses the deprecated 'proxies' argument.
+import httpx
+
+orig_client_init = httpx.Client.__init__
+def patched_client_init(self, *args, **kwargs):
+    if "proxies" in kwargs:
+        proxies = kwargs.pop("proxies")
+        if "proxy" not in kwargs:
+            if isinstance(proxies, dict):
+                kwargs["proxy"] = proxies.get("http://") or proxies.get("https://") or next(iter(proxies.values()), None)
+            else:
+                kwargs["proxy"] = proxies
+    orig_client_init(self, *args, **kwargs)
+httpx.Client.__init__ = patched_client_init
+
+orig_async_client_init = httpx.AsyncClient.__init__
+def patched_async_client_init(self, *args, **kwargs):
+    if "proxies" in kwargs:
+        proxies = kwargs.pop("proxies")
+        if "proxy" not in kwargs:
+            if isinstance(proxies, dict):
+                kwargs["proxy"] = proxies.get("http://") or proxies.get("https://") or next(iter(proxies.values()), None)
+            else:
+                kwargs["proxy"] = proxies
+    orig_async_client_init(self, *args, **kwargs)
+httpx.AsyncClient.__init__ = patched_async_client_init
 
 from groq import Groq
 from sqlalchemy.orm import Session
@@ -35,18 +64,13 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3          # retry up to 3 times on rate-limit errors
 INITIAL_BACKOFF = 2      # first retry waits 2 seconds, then 4, then 8
 
-
 # ── Groq client ─────────────────────────────────────────────────────────────
 
 def _get_client():
-    """
-    Create and return a Groq API client.
-    Raises ValueError if the API key is missing.
-    """
     if not GROQ_API_KEY:
         raise ValueError(
             "GROQ_API_KEY is not set in your .env file. "
-            "Get a free key at https://console.groq.com/keys "
+            "Get your free Groq key at https://console.groq.com "
             "and add it to your .env file."
         )
     return Groq(api_key=GROQ_API_KEY)
@@ -55,50 +79,40 @@ def _get_client():
 # ── Text utilities ────────────────────────────────────────────────────────────
 
 def _normalize_text(text: str) -> str:
-    """
-    Normalize input text to maximize cache hits.
-    """
+    if not text:
+        return ""
     text = text.lower().strip()
-    text = re.sub(r"\s+", " ", text)      # collapse multiple spaces
+    text = re.sub(r"\s+", " ", text)
     return text
 
-
 def _make_cache_key(function_name: str, *args: str) -> str:
-    """
-    Build a deterministic SHA-256 cache key from the function name and
-    its normalized input arguments.
-    """
     parts = [function_name] + [_normalize_text(a) for a in args]
     raw = "|".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-
 def _extract_json(text: str) -> str:
-    """
-    Strip markdown code fences from AI response if present.
-    """
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
-
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 
 def _get_cache(db: Session, key: str):
-    """Look up a cached AI response by its hash key. Returns parsed JSON or None."""
-    entry = db.query(AICache).filter(AICache.cache_key == key).first()
-    if entry:
-        logger.info("Cache HIT for key %s — skipping Groq API call", key[:16])
-        try:
+    if not db:
+        return None
+    try:
+        entry = db.query(AICache).filter(AICache.cache_key == key).first()
+        if entry:
+            logger.info("Cache HIT for key %s", key[:16])
             return json.loads(entry.response_json)
-        except json.JSONDecodeError:
-            return None
+    except Exception:
+        pass
     return None
 
-
 def _set_cache(db: Session, key: str, data) -> None:
-    """Store an AI response in the database cache."""
+    if not db:
+        return
     try:
         entry = AICache(
             cache_key=key,
@@ -108,17 +122,13 @@ def _set_cache(db: Session, key: str, data) -> None:
         db.commit()
         logger.info("Cache STORED for key %s", key[:16])
     except Exception:
-        # If there is a unique-constraint race condition, silently ignore
         db.rollback()
 
+# ── Shared Chat Helper ────────────────────────────────────────────────────────
 
-# ── Groq API call with exponential backoff ──────────────────────────────────
-
-def _call_groq_with_retry(prompt: str) -> str:
+def _chat(prompt: str) -> str:
     """
     Call the Groq API with exponential backoff on rate-limit errors.
-    Retries up to MAX_RETRIES times. On each retry, waits
-    INITIAL_BACKOFF * 2^attempt seconds (2s, 4s, 8s).
     """
     client = _get_client()
     last_exception = None
@@ -126,161 +136,159 @@ def _call_groq_with_retry(prompt: str) -> str:
     for attempt in range(MAX_RETRIES + 1):
         try:
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama-3.1-8b-instant",
                 messages=[
+                    {"role": "system", "content": "You are a helpful API that returns ONLY valid JSON arrays or objects. No markdown, no explanations."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
+                temperature=0.3,
             )
             return response.choices[0].message.content
         except Exception as e:
             last_exception = e
             error_str = str(e).lower()
+            logger.error("Groq API error (attempt %d/%d): %s", attempt + 1, MAX_RETRIES + 1, e)
 
-            logger.error(
-                "Groq API error (attempt %d/%d): %s",
-                attempt + 1, MAX_RETRIES + 1, e,
-            )
-
-            # Check if this is a rate-limit / quota error
-            is_rate_limit = any(keyword in error_str for keyword in [
-                "429", "rate limit", "too many requests"
-            ])
+            is_rate_limit = any(keyword in error_str for keyword in ["429", "rate limit", "too many requests"])
 
             if is_rate_limit and attempt < MAX_RETRIES:
                 wait_time = INITIAL_BACKOFF * (2 ** attempt)
-                logger.warning(
-                    "Groq rate limit hit (attempt %d/%d). "
-                    "Waiting %ds before retry...",
-                    attempt + 1, MAX_RETRIES, wait_time,
-                )
                 time.sleep(wait_time)
             else:
-                # Not a rate-limit error, or we've exhausted retries
-                break
+                raise last_exception
 
-    # Raise a clear error — NO silent fallback
-    raise RuntimeError(
-        f"Groq AI is currently unavailable after {MAX_RETRIES + 1} attempts. "
-        f"Last error: {last_exception}. "
-        f"Please try again later, or add subtasks/rewards manually."
-    )
+    raise last_exception
 
 
-# ── Function 1: Break down a task into subtasks ────────────────────────────────
+# ── Public API Functions ──────────────────────────────────────────────────────
 
 def breakdown_task(task_title: str, task_description: str, db: Session = None) -> list[dict]:
-    # ── Step 1: Check cache ──
-    cache_key = _make_cache_key("breakdown", task_title, task_description or "")
-    if db:
+    try:
+        cache_key = _make_cache_key("breakdown", task_title, task_description or "")
         cached = _get_cache(db, cache_key)
-        if cached and isinstance(cached, list) and len(cached) > 0:
+        if cached and isinstance(cached, list):
             return cached
 
-    # ── Step 2: Call Groq with retry ──
-    prompt = f"""
-You are a productivity assistant. Break down the following task into 5 to 8 small,
-actionable subtasks that a developer can complete one by one.
+        prompt = f"""
+        Break down the following task into 5 to 8 small, actionable subtasks.
+        For each subtask, estimate the time in minutes and suggest a fair point reward (between 5 and 30) based on complexity.
+        Task Title: {task_title}
+        Task Description: {task_description or 'None'}
 
-Task Title: {task_title}
-Task Description: {task_description if task_description else "No description provided"}
-
-Rules:
-- Each subtask should take 10 to 60 minutes
-- Subtasks should be in a logical order
-- Be specific and actionable (start with a verb like "Create", "Write", "Test", "Add")
-- Return ONLY a valid JSON array, no explanation, no markdown, no extra text
-
-Return format (copy this exactly):
-[
-    {{"title": "Subtask title here", "estimated_time": 30}},
-    {{"title": "Another subtask", "estimated_time": 20}}
-]
-"""
-
-    raw_response = _call_groq_with_retry(prompt)
-    clean_json = _extract_json(raw_response)
-    try:
+        Return ONLY a JSON array with this format:
+        [
+            {{"title": "Subtask title", "estimated_time": 30, "points": 15}}
+        ]
+        """
+        raw_response = _chat(prompt)
+        clean_json = _extract_json(raw_response)
         subtasks = json.loads(clean_json)
-    except Exception:
-        raise RuntimeError("Groq returned invalid JSON data. Please try again.")
 
-    # Validate the structure
-    if not isinstance(subtasks, list):
-        raise RuntimeError("Groq returned invalid data (not a list). Please try again.")
+        if not isinstance(subtasks, list):
+            raise RuntimeError("AI response is not a valid list.")
 
-    validated = []
-    for item in subtasks:
-        if isinstance(item, dict) and "title" in item:
-            validated.append({
-                "title": str(item["title"]),
-                "estimated_time": int(item.get("estimated_time", 30)),
-            })
+        validated = []
+        for item in subtasks:
+            if isinstance(item, dict) and "title" in item and item["title"].strip():
+                pts = int(item.get("points", 10))
+                pts = max(5, min(30, pts))
+                validated.append({
+                    "title": str(item["title"]).strip(),
+                    "estimated_time": int(item.get("estimated_time", 30)),
+                    "points": pts,
+                })
+        
+        if not validated:
+            raise RuntimeError("AI generated zero valid subtasks.")
 
-    if not validated:
-        raise RuntimeError("Groq returned no valid subtasks. Please try again.")
-
-    # ── Step 3: Store in cache ──
-    if db:
         _set_cache(db, cache_key, validated)
+        return validated
+    except Exception as e:
+        logger.error("breakdown_task failed: %s", e)
+        if isinstance(e, ValueError):
+            raise e
+        raise RuntimeError(f"AI service failed to generate subtasks: {e}")
 
-    return validated
-
-
-# ── Function 2: Suggest a fair points cost for a reward ───────────────────────
 
 def analyze_reward(reward_name: str, reward_description: str, db: Session = None) -> dict:
-    # ── Step 1: Check cache ──
-    cache_key = _make_cache_key("reward", reward_name, reward_description or "")
-    if db:
+    default_resp = {"suggested_cost": 100, "reasoning": "Default"}
+    try:
+        cache_key = _make_cache_key("reward", reward_name, reward_description or "")
         cached = _get_cache(db, cache_key)
         if cached and isinstance(cached, dict):
             return cached
 
-    # ── Step 2: Call Groq with retry ──
-    prompt = f"""
-You are a gamification expert helping someone stay productive.
-They earn points by completing tasks, and spend points on real-life rewards.
+        prompt = f"""
+        Suggest a fair points cost for this reward (between 50 and 500).
+        Reward Name: {reward_name}
+        Reward Description: {reward_description or 'None'}
 
-Suggest a fair points cost for this reward (between 50 and 500 points).
-
-Reward Name: {reward_name}
-Reward Description: {reward_description if reward_description else "No description provided"}
-
-Pricing guide:
-- 50-100 points  = small reward (5-min break, a glass of water, a short walk)
-- 100-200 points = medium reward (15-30 min of leisure, a snack, an episode of a show)
-- 200-350 points = large reward (an hour of gaming, ordering food, a movie)
-- 350-500 points = big reward (a full day off, a purchase, a special outing)
-
-Rules:
-- Return ONLY valid JSON, no explanation outside the JSON, no markdown
-- Be encouraging — rewards should feel achievable but earned
-
-Return format (copy this exactly):
-{{"suggested_cost": 150, "reasoning": "Your one sentence explanation here"}}
-"""
-
-    raw_response = _call_groq_with_retry(prompt)
-    clean_json = _extract_json(raw_response)
-    try:
+        Return ONLY a JSON object with this format:
+        {{"suggested_cost": 150, "reasoning": "Your explanation"}}
+        """
+        raw_response = _chat(prompt)
+        clean_json = _extract_json(raw_response)
         result = json.loads(clean_json)
-    except Exception:
-        raise RuntimeError("Groq returned invalid JSON data. Please try again.")
 
-    if not isinstance(result, dict):
-        raise RuntimeError("Groq returned invalid data (not a dict). Please try again.")
+        if not isinstance(result, dict):
+            return default_resp
 
-    suggested_cost = int(result.get("suggested_cost", 100))
-    suggested_cost = max(50, min(500, suggested_cost))
+        suggested_cost = int(result.get("suggested_cost", 100))
+        suggested_cost = max(50, min(500, suggested_cost))
 
-    validated = {
-        "suggested_cost": suggested_cost,
-        "reasoning": str(result.get("reasoning", "AI suggested this cost.")),
-    }
+        validated = {
+            "suggested_cost": suggested_cost,
+            "reasoning": str(result.get("reasoning", "AI suggested this cost.")),
+        }
 
-    # ── Step 3: Store in cache ──
-    if db:
         _set_cache(db, cache_key, validated)
+        return validated
+    except Exception as e:
+        logger.error("analyze_reward failed: %s", e)
+        return default_resp
 
-    return validated
+
+def analyze_task_difficulty(task_title: str, task_description: str, priority: str, due_date: str, db: Session = None) -> dict:
+    default_resp = {"bonus_points": 50, "reason": "Default"}
+    try:
+        cache_key = _make_cache_key("difficulty", task_title, task_description or "", priority or "", due_date or "")
+        cached = _get_cache(db, cache_key)
+        if cached and isinstance(cached, dict):
+            return cached
+
+        prompt = f"""
+        Analyze this task's difficulty and urgency to suggest bonus points (25-200).
+        Task Title: {task_title}
+        Task Description: {task_description or 'None'}
+        Priority: {priority or 'None'}
+        Due Date: {due_date or 'None'}
+
+        Scoring logic:
+        - 25-50: easy
+        - 50-100: moderate
+        - 100-150: hard or urgent
+        - 150-200: very hard AND urgent
+
+        Return ONLY a JSON object with this format:
+        {{"bonus_points": 75, "reason": "Your explanation"}}
+        """
+        raw_response = _chat(prompt)
+        clean_json = _extract_json(raw_response)
+        result = json.loads(clean_json)
+
+        if not isinstance(result, dict):
+            return default_resp
+
+        bonus_points = int(result.get("bonus_points", 50))
+        bonus_points = max(25, min(200, bonus_points))
+
+        validated = {
+            "bonus_points": bonus_points,
+            "reason": str(result.get("reason", "AI assigned this bonus.")),
+        }
+
+        _set_cache(db, cache_key, validated)
+        return validated
+    except Exception as e:
+        logger.error("analyze_task_difficulty failed: %s", e)
+        return default_resp
