@@ -256,11 +256,26 @@ def analyze_reward(
         analysis = ai_analyze_reward(
             reward_name=reward.name,
             reward_description=reward.description or "",
+            db=db,
         )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(e),
+        )
+    except RuntimeError as e:
+        # Gemini API failed after retries
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Gemini AI is currently unavailable (rate limit or API error). "
+                "Please try again later."
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI service error: {e}. Please try again later.",
         )
 
     # Save AI suggestion to the reward record

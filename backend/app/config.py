@@ -33,8 +33,8 @@ ACCESS_TOKEN_EXPIRE_DAYS: int = 7
 # ── AI ────────────────────────────────────────────────────────────────────────
 # Optional at startup — server runs fine without it.
 # AI endpoints return a clear error if key is missing.
-# Add GOOGLE_API_KEY to your .env before testing Part 4 / Part 5.
-GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+# Add GROQ_API_KEY to your .env before testing Part 4 / Part 5.
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "").strip()
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "*")

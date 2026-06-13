@@ -110,6 +110,7 @@ def breakdown_task(
         subtasks_data = ai_breakdown(
             task_title=task.title,
             task_description=task.description or "",
+            db=db,
         )
     except ValueError as e:
         # GOOGLE_API_KEY is missing
@@ -117,14 +118,19 @@ def breakdown_task(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(e),
         )
-
-    if not subtasks_data:
+    except RuntimeError as e:
+        # Gemini API failed after retries — no fallback
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "AI could not generate subtasks right now. "
-                "Try again, or add subtasks manually."
+                "Gemini AI is currently unavailable (rate limit or API error). "
+                "Please try again later, or add subtasks manually."
             ),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI service error: {e}. Please add subtasks manually.",
         )
 
     # Save every AI-generated subtask to the database

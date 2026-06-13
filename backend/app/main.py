@@ -32,16 +32,16 @@ app.add_middleware(
 )
 
 # ── Routers (uncomment as each part is added) ─────────────────────────────────
-# from app.api.auth import router as auth_router          # Part 2
-# from app.api.tasks import router as tasks_router        # Part 3
-# from app.api.subtasks import router as subtasks_router  # Part 4
-# from app.api.rewards import router as rewards_router    # Part 5
+from app.api.auth import router as auth_router          # Part 2
+from app.api.tasks import router as tasks_router        # Part 3
+from app.api.subtasks import router as subtasks_router  # Part 4
+from app.api.rewards import router as rewards_router    # Part 5
 # from app.api.gamification import router as stats_router # Part 6
 
-# app.include_router(auth_router,    prefix="/api", tags=["Auth"])
-# app.include_router(tasks_router,   prefix="/api", tags=["Tasks"])
-# app.include_router(subtasks_router,prefix="/api", tags=["Subtasks"])
-# app.include_router(rewards_router, prefix="/api", tags=["Rewards"])
+app.include_router(auth_router,    prefix="/api", tags=["Auth"])
+app.include_router(tasks_router,   prefix="/api", tags=["Tasks"])
+app.include_router(subtasks_router,prefix="/api", tags=["Subtasks"])
+app.include_router(rewards_router, prefix="/api", tags=["Rewards"])
 # app.include_router(stats_router,   prefix="/api", tags=["Gamification"])
 
 
