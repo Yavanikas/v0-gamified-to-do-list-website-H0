@@ -22,7 +22,7 @@ due_date    — optional ISO date string stored as plain VARCHAR for simplicity
 """
 
 import uuid
-from sqlalchemy import Column, String, Text, ForeignKey
+from sqlalchemy import Column, String, Text, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -46,6 +46,10 @@ class Task(Base, TimestampMixin):
 
     # Optional due date (stored as string — keep it simple for the hackathon)
     due_date = Column(String(20), nullable=True)
+
+    # AI dynamically assigned bonus
+    bonus_points = Column(Integer, nullable=False, default=50)
+    bonus_reason = Column(Text, nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="tasks")

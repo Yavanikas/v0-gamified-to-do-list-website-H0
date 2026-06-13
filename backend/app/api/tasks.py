@@ -19,13 +19,14 @@ Each user can only see and edit THEIR OWN tasks.
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Optional
 
 from app.api.deps import get_current_user
 from app.database.connection import get_db
 from app.models.task import Task
 from app.models.subtask import Subtask
 from app.models.user import User
+from app.services.ai import analyze_task_difficulty
 
 router = APIRouter()
 
@@ -85,6 +86,7 @@ class SubtaskInTask(BaseModel):
     title: str
     status: str
     estimated_time: Optional[int] = None
+    points: int
     ai_suggested: bool
 
     class Config:
@@ -98,7 +100,7 @@ class TaskResponse(BaseModel):
     status: str
     priority: str
     due_date: Optional[str]
-    subtasks: List[SubtaskInTask]
+    subtasks: list[SubtaskInTask]
     subtask_count: int
     completed_subtask_count: int
 
@@ -129,12 +131,15 @@ def format_task(task: Task) -> dict:
                 "title": s.title,
                 "status": s.status,
                 "estimated_time": s.estimated_time,
+                "points": s.points,
                 "ai_suggested": s.ai_suggested,
             }
             for s in subtasks
         ],
         "subtask_count": len(subtasks),
         "completed_subtask_count": completed,
+        "bonus_points": task.bonus_points,
+        "bonus_reason": task.bonus_reason or "",
     }
 
 
@@ -198,6 +203,21 @@ def create_task(
     db.commit()
     db.refresh(task)
 
+    try:
+        difficulty_data = analyze_task_difficulty(
+            task_title=task.title,
+            task_description=task.description,
+            priority=task.priority,
+            due_date=task.due_date,
+            db=db,
+        )
+        task.bonus_points = difficulty_data["bonus_points"]
+        task.bonus_reason = difficulty_data["reason"]
+        db.commit()
+        db.refresh(task)
+    except Exception:
+        pass
+
     return format_task(task)
 
 
@@ -257,6 +277,7 @@ def update_task(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your task.")
 
     # Only update fields that were actually sent (not None)
+    needs_reanalysis = False
     if data.title is not None:
         task.title = data.title
     if data.description is not None:
@@ -267,12 +288,32 @@ def update_task(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Priority must be one of: {', '.join(VALID_PRIORITIES)}",
             )
-        task.priority = data.priority
+        if task.priority != data.priority:
+            task.priority = data.priority
+            needs_reanalysis = True
     if data.due_date is not None:
-        task.due_date = data.due_date
+        if task.due_date != data.due_date:
+            task.due_date = data.due_date
+            needs_reanalysis = True
 
     db.commit()
     db.refresh(task)
+
+    if needs_reanalysis:
+        try:
+            difficulty_data = analyze_task_difficulty(
+                task_title=task.title,
+                task_description=task.description,
+                priority=task.priority,
+                due_date=task.due_date,
+                db=db,
+            )
+            task.bonus_points = difficulty_data["bonus_points"]
+            task.bonus_reason = difficulty_data["reason"]
+            db.commit()
+            db.refresh(task)
+        except Exception:
+            pass
 
     return format_task(task)
 

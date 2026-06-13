@@ -8,8 +8,6 @@ variables (populated via .env in development, real env vars in production).
 import os
 from dotenv import load_dotenv
 
-# Load .env file when running locally.  In production (e.g. Render / Railway)
-# environment variables are injected directly — load_dotenv() is a no-op then.
 load_dotenv()
 
 
@@ -33,12 +31,12 @@ ALGORITHM: str = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS: int = 7
 
 # ── AI ────────────────────────────────────────────────────────────────────────
-GOOGLE_API_KEY: str = _require("GOOGLE_API_KEY")
+# Optional at startup — server runs fine without it.
+# AI endpoints return a clear error if key is missing.
+# Add GROQ_API_KEY to your .env before testing Part 4 / Part 5.
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "").strip()
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-# Comma-separated list of allowed origins, e.g.
-#   ALLOWED_ORIGINS=http://localhost:3000,https://my-app.vercel.app
-# Defaults to wildcard "*" (fine for a hackathon / development).
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
 ALLOWED_ORIGINS: list[str] = (
     ["*"] if _raw_origins == "*" else [o.strip() for o in _raw_origins.split(",")]
