@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useRef, type KeyboardEvent, type ClipboardEvent } from "react"
+import { useState, useRef, useEffect, type KeyboardEvent, type ClipboardEvent } from "react"
 import { MainApp } from "@/components/main-app"
+import { api } from "@/lib/api"
 
 // ─── Google "G" pixel-style SVG ────────────────────────────────────────────
 function GoogleIcon() {
@@ -81,22 +82,46 @@ function PixelButton({
 function LoginView({
   onLogin,
   onForgot,
+  onRegisterRedirect,
 }: {
   onLogin: () => void
   onForgot: () => void
+  onRegisterRedirect: () => void
 }) {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    // Frontend-only: any non-empty credentials log you in
-    if (email.trim() && password.trim()) onLogin()
+    if (!email.trim() || !password.trim()) {
+      setError("Please enter email and password.")
+      return
+    }
+    setError("")
+    setLoading(true)
+    try {
+      await api.login(email.trim(), password.trim())
+      onLogin()
+    } catch (err: any) {
+      setError(err.message || "Invalid email or password.")
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
     <PixelBackground>
       <form onSubmit={handleSubmit} className="game-panel flex flex-col gap-5 p-8">
+        <h1 className="text-center font-sans text-2xl tracking-widest text-foreground">
+          LOGIN
+        </h1>
+
+        {error && (
+          <p className="text-center font-mono text-xs text-urgent">{error}</p>
+        )}
+
         {/* Google button */}
         <button
           type="button"
@@ -105,7 +130,7 @@ function LoginView({
             bg-panel px-6 py-3 font-mono text-base text-foreground backdrop-blur-sm
             transition-colors hover:border-cyan hover:text-cyan
           "
-          onClick={onLogin}
+          onClick={() => setError("Google login is not yet available. Please use email & password.")}
           aria-label="Login with Google"
         >
           <GoogleIcon />
@@ -131,6 +156,7 @@ function LoginView({
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
+            required
           />
         </div>
 
@@ -146,19 +172,141 @@ function LoginView({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
+            required
           />
         </div>
 
         {/* Login button */}
-        <PixelButton type="submit">Login</PixelButton>
+        <PixelButton type="submit" disabled={loading}>
+          {loading ? "Logging in..." : "Login"}
+        </PixelButton>
 
-        {/* Forgot password */}
+        <div className="flex flex-col gap-2 text-center mt-2">
+          {/* Forgot password */}
+          <button
+            type="button"
+            onClick={onForgot}
+            className="font-mono text-sm text-cyan underline underline-offset-4 transition-opacity hover:opacity-80"
+          >
+            Forgot Password?
+          </button>
+          
+          {/* Sign up toggle */}
+          <button
+            type="button"
+            onClick={onRegisterRedirect}
+            className="font-mono text-sm text-cyan underline underline-offset-4 transition-opacity hover:opacity-80"
+          >
+            Don't have an account? Sign Up
+          </button>
+        </div>
+      </form>
+    </PixelBackground>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGISTER VIEW
+// ─────────────────────────────────────────────────────────────────────────────
+function RegisterView({
+  onRegister,
+  onBack,
+}: {
+  onRegister: () => void
+  onBack: () => void
+}) {
+  const [email, setEmail] = useState("")
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!email.trim() || !username.trim() || !password.trim()) {
+      setError("Please fill in all fields.")
+      return
+    }
+    setError("")
+    setLoading(true)
+    try {
+      await api.register(email.trim(), username.trim(), password.trim())
+      onRegister()
+    } catch (err: any) {
+      setError(err.message || "Registration failed.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <PixelBackground>
+      <form onSubmit={handleSubmit} className="game-panel flex flex-col gap-5 p-8">
+        <h1 className="text-center font-sans text-2xl tracking-widest text-foreground">
+          CREATE ACCOUNT
+        </h1>
+
+        {error && (
+          <p className="text-center font-mono text-xs text-urgent">{error}</p>
+        )}
+
+        {/* Username */}
+        <div className="flex flex-col gap-2">
+          <label className="font-mono text-base text-foreground" htmlFor="reg-username">
+            Username
+          </label>
+          <PixelInput
+            id="reg-username"
+            type="text"
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+        </div>
+
+        {/* Email */}
+        <div className="flex flex-col gap-2">
+          <label className="font-mono text-base text-foreground" htmlFor="reg-email">
+            Email
+          </label>
+          <PixelInput
+            id="reg-email"
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </div>
+
+        {/* Password */}
+        <div className="flex flex-col gap-2">
+          <label className="font-mono text-base text-foreground" htmlFor="reg-password">
+            Password
+          </label>
+          <PixelInput
+            id="reg-password"
+            type="password"
+            placeholder="*******"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </div>
+
+        {/* Register button */}
+        <PixelButton type="submit" disabled={loading}>
+          {loading ? "Registering..." : "Sign Up"}
+        </PixelButton>
+
+        {/* Back to login */}
         <button
           type="button"
-          onClick={onForgot}
+          onClick={onBack}
           className="font-mono text-sm text-cyan underline underline-offset-4 transition-opacity hover:opacity-80"
         >
-          Forgot Password?
+          Already have an account? Login
         </button>
       </form>
     </PixelBackground>
@@ -330,14 +478,32 @@ function OtpView({
 // ─────────────────────────────────────────────────────────────────────────────
 // ROOT PAGE — orchestrates all auth views
 // ─────────────────────────────────────────────────────────────────────────────
-type AuthView = "login" | "forgot" | "otp"
+type AuthView = "login" | "register" | "forgot" | "otp"
 
 export default function Page() {
   const [view, setView] = useState<AuthView>("login")
   const [isAuthed, setIsAuthed] = useState(false)
   const [forgotEmail, setForgotEmail] = useState("")
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("token")
+      if (token) {
+        setIsAuthed(true)
+      }
+    }
+  }, [])
+
   if (isAuthed) return <MainApp />
+
+  if (view === "register") {
+    return (
+      <RegisterView
+        onRegister={() => setIsAuthed(true)}
+        onBack={() => setView("login")}
+      />
+    )
+  }
 
   if (view === "forgot") {
     return (
@@ -366,6 +532,7 @@ export default function Page() {
     <LoginView
       onLogin={() => setIsAuthed(true)}
       onForgot={() => setView("forgot")}
+      onRegisterRedirect={() => setView("register")}
     />
   )
 }

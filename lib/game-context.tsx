@@ -1,7 +1,8 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useState } from "react"
+import { createContext, useContext, useState, useEffect } from "react"
+import { api } from "@/lib/api"
 
 export type Difficulty = "Easy" | "Normal" | "Hard"
 export type Urgency = "Urgent" | "Normal"
@@ -19,6 +20,8 @@ export type Task = {
   urgency: Urgency
   difficulty: Difficulty
   subtasks: SubTask[]
+  bonus_points?: number
+  bonus_reason?: string
 }
 
 export type ShopItem = {
@@ -26,6 +29,9 @@ export type ShopItem = {
   name: string
   cost: number
   icon: "instagram" | "chips" | "book" | "coffee"
+  claimed?: boolean
+  ai_suggested_cost?: number | null
+  ai_reason?: string | null
 }
 
 type GameState = {
@@ -35,86 +41,171 @@ type GameState = {
   streak: number
   tasks: Task[]
   shopItems: ShopItem[]
-  toggleTask: (id: string) => void
-  toggleSub: (taskId: string, subId: string) => void
-  addTask: (task: Omit<Task, "id">) => void
-  buyItem: (id: string) => void
-  addShopItem: (item: Omit<ShopItem, "id">) => void
+  loading: boolean
+  fetchData: () => Promise<void>
+  toggleTask: (id: string) => Promise<void>
+  toggleSub: (taskId: string, subId: string) => Promise<void>
+  addTask: (task: { title: string; urgency: Urgency; difficulty: Difficulty; subtasksCount: number; isAi: boolean }) => Promise<void>
+  buyItem: (id: string) => Promise<void>
+  addShopItem: (item: Omit<ShopItem, "id">) => Promise<void>
 }
 
 const GameContext = createContext<GameState | null>(null)
 
-const initialTasks: Task[] = [
-  {
-    id: "t1",
-    title: "Pixel Art Project Proposal",
-    done: false,
-    urgency: "Urgent",
-    difficulty: "Easy",
-    subtasks: [
-      { id: "s1", title: "Write draft", done: true },
-      { id: "s2", title: "Create assets", done: false },
-    ],
-  },
-  { id: "t2", title: "Water the Plants", done: false, urgency: "Normal", difficulty: "Easy", subtasks: [] },
-  { id: "t3", title: "Read Chapter 5", done: false, urgency: "Normal", difficulty: "Hard", subtasks: [] },
-  {
-    id: "t4",
-    title: "Weekly Team Meeting",
-    done: true,
-    urgency: "Urgent",
-    difficulty: "Normal",
-    subtasks: [{ id: "s3", title: "Prepare slides", done: true }],
-  },
-  { id: "t5", title: "Grocery Shopping", done: false, urgency: "Normal", difficulty: "Easy", subtasks: [] },
-  { id: "t6", title: "Code Review", done: false, urgency: "Normal", difficulty: "Normal", subtasks: [] },
-  { id: "t7", title: "Finish Project Proposal", done: true, urgency: "Urgent", difficulty: "Hard", subtasks: [] },
-]
-
-const initialShop: ShopItem[] = [
-  { id: "i1", name: "15 Mins Instagram", cost: 60, icon: "instagram" },
-  { id: "i2", name: "Packet of Chips", cost: 200, icon: "chips" },
-  { id: "i3", name: "30 Mins Reading", cost: 200, icon: "book" },
-  { id: "i4", name: "Coffee Break", cost: 200, icon: "coffee" },
-  { id: "i5", name: "Packet of Chips", cost: 100, icon: "chips" },
-  { id: "i6", name: "30 Mins Reading", cost: 300, icon: "book" },
-  { id: "i7", name: "Coffee Break", cost: 200, icon: "coffee" },
-]
-
 export function GameProvider({ children }: { children: React.ReactNode }) {
-  const [coins, setCoins] = useState(1250)
-  const [xp] = useState(7400)
-  const [level] = useState(15)
-  const [streak] = useState(7)
-  const [tasks, setTasks] = useState<Task[]>(initialTasks)
-  const [shopItems, setShopItems] = useState<ShopItem[]>(initialShop)
+  const [coins, setCoins] = useState(0)
+  const [xp, setXp] = useState(0)
+  const [level, setLevel] = useState(1)
+  const [streak] = useState(7) // default streak
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [shopItems, setShopItems] = useState<ShopItem[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const toggleTask = (id: string) =>
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)))
-
-  const toggleSub = (taskId: string, subId: string) =>
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId
-          ? { ...t, subtasks: t.subtasks.map((s) => (s.id === subId ? { ...s, done: !s.done } : s)) }
-          : t,
-      ),
-    )
-
-  const addTask = (task: Omit<Task, "id">) =>
-    setTasks((prev) => [...prev, { ...task, id: `t${Date.now()}` }])
-
-  const buyItem = (id: string) => {
-    const item = shopItems.find((i) => i.id === id)
-    if (item && coins >= item.cost) setCoins((c) => c - item.cost)
+  const mapBackendTask = (t: any): Task => {
+    return {
+      id: t.id,
+      title: t.title,
+      done: t.status === "completed",
+      urgency: t.priority === "high" ? "Urgent" : "Normal",
+      difficulty: t.priority === "low" ? "Easy" : t.priority === "high" ? "Hard" : "Normal",
+      subtasks: (t.subtasks || []).map((s: any) => ({
+        id: s.id,
+        title: s.title,
+        done: s.status === "completed",
+      })),
+      bonus_points: t.bonus_points,
+      bonus_reason: t.bonus_reason,
+    }
   }
 
-  const addShopItem = (item: Omit<ShopItem, "id">) =>
-    setShopItems((prev) => [...prev, { ...item, id: `i${Date.now()}` }])
+  const mapBackendReward = (r: any): ShopItem => {
+    let icon: "instagram" | "chips" | "book" | "coffee" = "coffee"
+    const nameLower = r.name.toLowerCase()
+    if (nameLower.includes("instagram") || nameLower.includes("social")) icon = "instagram"
+    else if (nameLower.includes("chip") || nameLower.includes("snack") || nameLower.includes("food")) icon = "chips"
+    else if (nameLower.includes("read") || nameLower.includes("book") || nameLower.includes("study")) icon = "book"
+
+    return {
+      id: r.id,
+      name: r.name,
+      cost: r.cost,
+      icon,
+      claimed: r.claimed,
+      ai_suggested_cost: r.ai_suggested_cost,
+      ai_reason: r.ai_reason,
+    }
+  }
+
+  const fetchData = async () => {
+    try {
+      const [tasksData, rewardsData, statsData] = await Promise.all([
+        api.getTasks(),
+        api.getRewards(),
+        api.getUserStats(),
+      ])
+
+      setTasks(tasksData.map(mapBackendTask))
+      // Filter out claimed rewards or keep them for display
+      setShopItems(rewardsData.map(mapBackendReward))
+      
+      const totalPoints = statsData.points_and_level.total_points
+      setCoins(totalPoints)
+      setXp(totalPoints * 10)
+      setLevel(statsData.points_and_level.level)
+    } catch (err) {
+      console.error("Error fetching game data:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchData()
+  }, [])
+
+  const toggleTask = async (id: string) => {
+    const task = tasks.find((t) => t.id === id)
+    if (!task) return
+    const newStatus = task.done ? "not_started" : "completed"
+    try {
+      await api.updateTaskStatus(id, newStatus)
+      await fetchData()
+    } catch (err) {
+      console.error("Error toggling task:", err)
+    }
+  }
+
+  const toggleSub = async (taskId: string, subId: string) => {
+    try {
+      await api.completeSubtask(subId)
+      await fetchData()
+    } catch (err) {
+      console.error("Error completing subtask:", err)
+    }
+  }
+
+  const addTask = async (task: { title: string; urgency: Urgency; difficulty: Difficulty; subtasksCount: number; isAi: boolean }) => {
+    // Map urgency/difficulty to backend priority
+    let priority = "medium"
+    if (task.urgency === "Urgent" || task.difficulty === "Hard") {
+      priority = "high"
+    } else if (task.difficulty === "Easy") {
+      priority = "low"
+    }
+
+    try {
+      const createdTask = await api.createTask(task.title, "", priority)
+      if (task.isAi) {
+        // AI breakdown triggers subtask generation on the backend
+        await api.breakdownTask(createdTask.id)
+      } else if (task.subtasksCount > 0) {
+        // Manually create N subtasks
+        for (let i = 0; i < task.subtasksCount; i++) {
+          await api.addSubtask(createdTask.id, `Subtask ${i + 1}`)
+        }
+      }
+      await fetchData()
+    } catch (err) {
+      console.error("Error adding task:", err)
+      throw err
+    }
+  }
+
+  const buyItem = async (id: string) => {
+    try {
+      await api.claimReward(id)
+      await fetchData()
+    } catch (err) {
+      console.error("Error buying item:", err)
+    }
+  }
+
+  const addShopItem = async (item: Omit<ShopItem, "id">) => {
+    try {
+      await api.createReward(item.name, "", item.cost)
+      await fetchData()
+    } catch (err) {
+      console.error("Error adding shop item:", err)
+    }
+  }
 
   return (
     <GameContext.Provider
-      value={{ coins, xp, level, streak, tasks, shopItems, toggleTask, toggleSub, addTask, buyItem, addShopItem }}
+      value={{
+        coins,
+        xp,
+        level,
+        streak,
+        tasks,
+        shopItems,
+        loading,
+        fetchData,
+        toggleTask,
+        toggleSub,
+        addTask,
+        buyItem,
+        addShopItem,
+      }}
     >
       {children}
     </GameContext.Provider>

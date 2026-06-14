@@ -26,8 +26,9 @@ export function ProfileTab() {
   const [showEmail, setShowEmail] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
 
-  const email = "user_pixel@questmail.com"
-  const password = "p1x3lQuest!2024"
+  const email = typeof window !== "undefined" ? localStorage.getItem("email") || "user_pixel@questmail.com" : "user_pixel@questmail.com"
+  const username = typeof window !== "undefined" ? localStorage.getItem("username") || "USER_01" : "USER_01"
+  const password = "••••••••" // password is hashed on server and cannot be retrieved in plain text
   const xpCurrent = xp % 1000
   const xpMax = 1000
   const xpPct = Math.min(100, Math.round((xpCurrent / xpMax) * 100))
@@ -61,7 +62,7 @@ export function ProfileTab() {
 
           {/* Username / Level / XP bar / Streak */}
           <div className="flex flex-1 flex-col gap-2">
-            <p className="font-sans text-2xl tracking-widest text-foreground">USER_01</p>
+            <p className="font-sans text-2xl tracking-widest text-foreground">{username}</p>
             <p className="font-sans text-base tracking-widest text-foreground/80">
               LEVEL {level}
             </p>
